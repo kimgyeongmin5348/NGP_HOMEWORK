@@ -1,10 +1,5 @@
 #include "Common.h"
-#include <vector>
-#include <mutex>
-#include <memory>
-#include <iomanip>
-#include <fstream>
-#include <string>
+
 
 #define SERVERPORT 9000
 #define BUFSIZE    512
@@ -14,7 +9,7 @@ using namespace std;
 struct ClientInfo {
     string ip;
     float progress;
-    string filename;
+    int number;  // 클라이언트 번호 추가
     mutex mtx;
 };
 
@@ -22,38 +17,31 @@ vector<shared_ptr<ClientInfo>> clients;
 mutex clients_mutex;
 mutex console_mutex;
 vector<thread> client_threads;
+int client_counter = 0;
 
-// 콘솔 화면 업데이트 함수
 void update_display() {
     lock_guard<mutex> lock(console_mutex);
 
     // 커서를 화면 맨 위로 이동
-    system("cls");
-
-    cout << "=== 파일 수신 현황 ===" << endl;
-    cout << "현재 연결된 클라이언트 수: " << clients.size() << endl << endl;
+    cout << "\033[H";
 
     // 각 클라이언트의 진행 상황 출력
     for (const auto& client : clients) {
         lock_guard<mutex> client_lock(client->mtx);
-        cout << "클라이언트 IP: " << client->ip << endl;
-        cout << "파일명: " << client->filename << endl;
-        cout << "진행률: " << fixed << setprecision(2) << client->progress << "%" << endl;
-        cout << "----------------------------------------" << endl;
+        cout << "파일 #" << client->number << " 수신중... "
+            << fixed << setprecision(2) << client->progress << "%" << endl;
     }
+
+    // 남은 줄 지우기
+    cout << "\033[J" << flush;
 }
 
-// 클라이언트 처리 함수
 void handle_client(SOCKET client_sock, sockaddr_in clientaddr, shared_ptr<ClientInfo> client_info) {
-    // 클라이언트 IP 저장
     char clientIP[INET_ADDRSTRLEN];
     inet_ntop(AF_INET, &clientaddr.sin_addr, clientIP, sizeof(clientIP));
-    {
-        lock_guard<mutex> lock(client_info->mtx);
-        client_info->ip = clientIP;
-    }
+    client_info->ip = clientIP;
 
-    // 파일 이름 길이 수신
+    // 고정길이
     int namelen;
     if (recv(client_sock, (char*)&namelen, sizeof(int), MSG_WAITALL) == SOCKET_ERROR) {
         err_display("recv() - namelen");
@@ -61,7 +49,7 @@ void handle_client(SOCKET client_sock, sockaddr_in clientaddr, shared_ptr<Client
         return;
     }
 
-    // 파일 이름 수신
+    // 가변길이
     string filename(namelen, '\0');
     if (recv(client_sock, &filename[0], namelen, MSG_WAITALL) == SOCKET_ERROR) {
         err_display("recv() - filename");
@@ -69,12 +57,7 @@ void handle_client(SOCKET client_sock, sockaddr_in clientaddr, shared_ptr<Client
         return;
     }
 
-    {
-        lock_guard<mutex> lock(client_info->mtx);
-        client_info->filename = filename;
-    }
-
-    // 파일 크기 수신
+    // 고정길이
     long long filesize;
     if (recv(client_sock, (char*)&filesize, sizeof(long long), MSG_WAITALL) == SOCKET_ERROR) {
         err_display("recv() - filesize");
@@ -82,19 +65,16 @@ void handle_client(SOCKET client_sock, sockaddr_in clientaddr, shared_ptr<Client
         return;
     }
 
-    // 파일 생성
     ofstream file(filename, ios::binary);
     if (!file) {
         closesocket(client_sock);
         return;
     }
 
-    // 파일 데이터 수신
     long long totalrecv = 0;
     char buf[BUFSIZE];
-
     while (totalrecv < filesize) {
-        int retval = recv(client_sock, buf, (int)min<long long>(BUFSIZE, filesize - totalrecv), 0);
+        int retval = recv(client_sock, buf, (int)std::min<long long>(BUFSIZE, filesize - totalrecv), 0);
         if (retval == SOCKET_ERROR) {
             err_display("recv()");
             break;
@@ -116,34 +96,23 @@ void handle_client(SOCKET client_sock, sockaddr_in clientaddr, shared_ptr<Client
         }
 
         update_display();
+
     }
 
     file.close();
     closesocket(client_sock);
 
-    // 클라이언트 정보 제거
-    {
-        lock_guard<mutex> lock(clients_mutex);
-        auto it = find_if(clients.begin(), clients.end(),
-            [&client_info](const auto& c) { return c == client_info; });
-        if (it != clients.end()) {
-            clients.erase(it);
-        }
-    }
-    update_display();
 }
 
+
 int main() {
-    // 윈속 초기화
     WSADATA wsa;
     if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0)
         return 1;
 
-    // 소켓 생성
     SOCKET listen_sock = socket(AF_INET, SOCK_STREAM, 0);
     if (listen_sock == INVALID_SOCKET) err_quit("socket()");
 
-    // bind()
     sockaddr_in serveraddr{};
     serveraddr.sin_family = AF_INET;
     serveraddr.sin_addr.s_addr = htonl(INADDR_ANY);
@@ -151,15 +120,12 @@ int main() {
     if (bind(listen_sock, (sockaddr*)&serveraddr, sizeof(serveraddr)) == SOCKET_ERROR)
         err_quit("bind()");
 
-    // listen()
     if (listen(listen_sock, SOMAXCONN) == SOCKET_ERROR)
         err_quit("listen()");
 
-    system("cls");
-    cout << "=== 파일 수신 서버 ===" << endl;
-    cout << "서버 시작. 클라이언트 대기 중..." << endl << endl;
+    cout << "\033[2J\033[H";
+    cout << "서버 시작. 클라이언트 대기 중..." << endl;
 
-    // 클라이언트 접속 대기
     while (true) {
         sockaddr_in clientaddr{};
         int addrlen = sizeof(clientaddr);
@@ -172,14 +138,17 @@ int main() {
         auto client_info = make_shared<ClientInfo>();
         {
             lock_guard<mutex> lock(clients_mutex);
+            client_counter++;  // 클라이언트 번호 증가
+            client_info->number = client_counter;  // 번호 할당
             clients.push_back(client_info);
         }
 
         client_threads.emplace_back(handle_client, client_sock, clientaddr, client_info);
         update_display();
+        cout << endl;
     }
 
-    // 정리
+
     closesocket(listen_sock);
     WSACleanup();
     return 0;
