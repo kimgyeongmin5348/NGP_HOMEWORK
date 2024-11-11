@@ -1,5 +1,5 @@
 #include "Common.h"
-#include "resource2.h"
+#include "resource.h"
 
 #define SERVERIP   "127.0.0.1"  // 192.168.41.135 , 127.0.0.1
 #define SERVERPORT 9000
