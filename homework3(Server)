@@ -1,0 +1,187 @@
+#include "Common.h"
+
+ 
+
+#define SERVERPORT 9000
+
+#define BUFSIZE    512
+
+ 
+
+using namespace std;
+
+ 
+
+int main() {
+
+    WSADATA wsa;
+
+    if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0)
+
+        return 1;
+
+ 
+
+    SOCKET listen_sock = socket(AF_INET, SOCK_STREAM, 0);
+
+    if (listen_sock == INVALID_SOCKET) err_quit("socket()");
+
+ 
+
+    sockaddr_in serveraddr{};
+
+    serveraddr.sin_family = AF_INET;
+
+    serveraddr.sin_addr.s_addr = htonl(INADDR_ANY);
+
+    serveraddr.sin_port = htons(SERVERPORT);
+
+    if (bind(listen_sock, (sockaddr*)&serveraddr, sizeof(serveraddr)) == SOCKET_ERROR)
+
+        err_quit("bind()");
+
+ 
+
+    if (listen(listen_sock, SOMAXCONN) == SOCKET_ERROR)
+
+        err_quit("listen()");
+
+ 
+
+    while (true) {
+
+        sockaddr_in clientaddr{};
+
+        int addrlen = sizeof(clientaddr);
+
+        SOCKET client_sock = accept(listen_sock, (sockaddr*)&clientaddr, &addrlen);
+
+        if (client_sock == INVALID_SOCKET) {
+
+            err_display("accept()");
+
+            break;
+
+        }
+
+ 
+
+        // 고정길이
+
+        int namelen;
+
+        if (recv(client_sock, (char*)&namelen, sizeof(int), MSG_WAITALL) == SOCKET_ERROR) {
+
+            err_display("recv() - namelen");
+
+            closesocket(client_sock);
+
+            continue;
+
+        }
+
+ 
+
+        // 가변길이
+
+        string filename(namelen, '\0');
+
+        if (recv(client_sock, &filename[0], namelen, MSG_WAITALL) == SOCKET_ERROR) {
+
+            err_display("recv() - filename");
+
+            closesocket(client_sock);
+
+            continue;
+
+        }
+
+ 
+
+        // 고정길이
+
+        long long filesize;
+
+        if (recv(client_sock, (char*)&filesize, sizeof(long long), MSG_WAITALL) == SOCKET_ERROR) {
+
+            err_display("recv() - filesize");
+
+            closesocket(client_sock);
+
+            continue;
+
+        }
+
+ 
+
+        ofstream file(filename, ios::binary);
+
+        if (!file) {
+
+            closesocket(client_sock);
+
+            continue;
+
+        }
+
+ 
+
+        // 클라이언트파일 불러읽기?
+
+        long long totalrecv = 0;
+
+        char buf[BUFSIZE];
+
+        while (totalrecv < filesize) {
+
+            int retval = recv(client_sock, buf, (int)std::min<long long>(BUFSIZE, filesize - totalrecv), 0);
+
+            if (retval == SOCKET_ERROR) {
+
+                err_display("recv()");
+
+                break;
+
+            }
+
+            else if (retval == 0)
+
+                break;
+
+ 
+
+            file.write(buf, retval);
+
+            if (!file) {
+
+                cerr << "Failed to write to file" << endl;
+
+                break;
+
+            }
+
+ 
+
+            totalrecv += retval;
+
+            cout << "\r수신중... " << (float)totalrecv / filesize * 100 << "%" << flush;
+
+        }
+
+ 
+
+        file.close();
+
+        closesocket(client_sock);
+
+    }
+
+ 
+
+    closesocket(listen_sock);
+
+    WSACleanup();
+
+    return 0;
+
+}
