@@ -1,0 +1,156 @@
+#include "Common.h"
+#include "resource2.h"
+
+#define SERVERIP   "127.0.0.1"  // 192.168.41.135 , 127.0.0.1
+#define SERVERPORT 9000
+#define BUFSIZE    512
+
+// 대화상자 프로시저
+INT_PTR CALLBACK DlgProc(HWND, UINT, WPARAM, LPARAM);
+void DisplayError(const char* msg);
+DWORD WINAPI FileTransferThread(LPVOID arg);
+
+SOCKET sock; // 소켓
+HWND hFilePathEdit; // 파일 경로 표시
+HWND hProgressBar; // 진행률 표시
+HWND hSendButton; // 전송 버튼
+std::filesystem::path selectedFile; // 선택된 파일 경로
+
+int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
+    LPSTR lpCmdLine, int nCmdShow)
+{
+    // 윈속 초기화
+    WSADATA wsa;
+    if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0)
+        return 1;
+
+    // 대화상자 생성
+    DialogBox(hInstance, MAKEINTRESOURCE(IDD_DIALOG1), NULL, DlgProc);
+
+    // 윈속 종료
+    WSACleanup();
+    return 0;
+}
+
+// 대화상자 프로시저
+INT_PTR CALLBACK DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
+{
+    switch (uMsg) {
+    case WM_INITDIALOG:
+        hFilePathEdit = GetDlgItem(hDlg, IDC_EDIT1);
+        hProgressBar = GetDlgItem(hDlg, IDC_PROGRESS1);
+        hSendButton = GetDlgItem(hDlg, IDC_SEND);
+        SendMessage(hProgressBar, PBM_SETRANGE, 0, MAKELPARAM(0, 100));
+        return TRUE;
+
+    case WM_COMMAND:
+        switch (LOWORD(wParam)) {
+        case IDC_BROWSE: // 파일 선택 버튼
+        {
+            OPENFILENAMEA ofn = { 0 };
+            char szFile[260] = { 0 };
+            ofn.lStructSize = sizeof(ofn);
+            ofn.hwndOwner = hDlg;
+            ofn.lpstrFile = szFile;
+            ofn.nMaxFile = sizeof(szFile);
+            ofn.lpstrFilter = "All Files\0*.*\0";
+            ofn.nFilterIndex = 1;
+            ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST;
+
+            if (GetOpenFileNameA(&ofn)) {
+                selectedFile = ofn.lpstrFile;
+                SetWindowTextA(hFilePathEdit, selectedFile.string().c_str());
+                EnableWindow(hSendButton, TRUE);
+            }
+            return TRUE;
+        }
+
+        case IDC_SEND: // 전송 버튼
+            EnableWindow(hSendButton, FALSE);
+            CreateThread(NULL, 0, FileTransferThread, NULL, 0, NULL);
+            return TRUE;
+
+        case IDCANCEL:
+            EndDialog(hDlg, IDCANCEL);
+            return TRUE;
+        }
+        break;
+    }
+    return FALSE;
+}
+
+// 파일 전송 스레드
+DWORD WINAPI FileTransferThread(LPVOID arg)
+{
+    // 소켓 생성
+    sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (sock == INVALID_SOCKET) {
+        DisplayError("socket()");
+        return 1;
+    }
+
+    // connect()
+    struct sockaddr_in serveraddr;
+    memset(&serveraddr, 0, sizeof(serveraddr));
+    serveraddr.sin_family = AF_INET;
+    serveraddr.sin_addr.s_addr = inet_addr(SERVERIP);
+    serveraddr.sin_port = htons(SERVERPORT);
+    if (connect(sock, (struct sockaddr*)&serveraddr, sizeof(serveraddr)) == SOCKET_ERROR) {
+        DisplayError("connect()");
+        return 1;
+    }
+
+    // 파일 열기
+    std::ifstream file(selectedFile, std::ios::binary);
+    if (!file) {
+        MessageBoxA(NULL, "파일을 열 수 없습니다.", "오류", MB_ICONERROR);
+        return 1;
+    }
+
+    // 파일 이름과 크기 전송
+    std::string filename = selectedFile.filename().string();
+    int namelen = filename.length();
+    send(sock, (char*)&namelen, sizeof(int), 0);
+    send(sock, filename.c_str(), namelen, 0);
+
+    auto filesize = std::filesystem::file_size(selectedFile);
+    send(sock, (char*)&filesize, sizeof(long long), 0);
+
+    // 파일 전송
+    char buf[BUFSIZE];
+    long long totalsent = 0;
+    while (totalsent < filesize) {
+        file.read(buf, BUFSIZE);
+        int bytesRead = file.gcount();
+        int retval = send(sock, buf, bytesRead, 0);
+        if (retval == SOCKET_ERROR) {
+            DisplayError("send()");
+            break;
+        }
+        totalsent += retval;
+
+        // 진행률 업데이트
+        int percent = (int)((float)totalsent / filesize * 100);
+        SendMessage(hProgressBar, PBM_SETPOS, percent, 0);
+    }
+
+    MessageBoxA(NULL, "파일 전송이 완료되었습니다.", "알림", MB_ICONINFORMATION);
+    EnableWindow(hSendButton, TRUE);
+
+    closesocket(sock);
+    file.close();
+    return 0;
+}
+
+// 소켓 함수 오류 출력
+void DisplayError(const char* msg)
+{
+    LPVOID lpMsgBuf;
+    FormatMessageA(
+        FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM,
+        NULL, WSAGetLastError(),
+        MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+        (char*)&lpMsgBuf, 0, NULL);
+    MessageBoxA(NULL, (char*)lpMsgBuf, msg, MB_ICONERROR);
+    LocalFree(lpMsgBuf);
+}
