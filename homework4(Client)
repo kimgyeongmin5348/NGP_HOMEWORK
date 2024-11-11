@@ -1,0 +1,163 @@
+#include "Common.h"
+
+ 
+
+#define SERVERPORT 9000
+
+#define BUFSIZE    512
+
+ 
+
+using namespace std;
+
+ 
+
+ 
+
+int main(int argc, char* argv[]) {
+
+    if (argc < 3) {
+
+        cout << "Usage: " << argv[0] << " <server_ip> <filename>" << endl;
+
+        return 1;
+
+    }
+
+ 
+
+    const char* SERVERIP = argv[1];
+
+    filesystem::path filepath(argv[2]);
+
+    string filename = filepath.filename().string();
+
+ 
+
+    cout << "서버 IP: " << SERVERIP << endl;
+
+    cout << "전송할 파일: " << filename << endl;
+
+ 
+
+    ifstream file(filepath, ios::binary);
+
+    if (!file) {
+
+        cerr << "Failed to open file: " << filepath << endl;
+
+        return 1;
+
+    }
+
+ 
+
+    auto file_size = filesystem::file_size(filepath);
+
+ 
+
+    WSADATA wsa;
+
+    if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0)
+
+        return 1;
+
+ 
+
+    SOCKET sock = socket(AF_INET, SOCK_STREAM, 0);
+
+    if (sock == INVALID_SOCKET) err_quit("socket()");
+
+ 
+
+    sockaddr_in serveraddr{};
+
+    serveraddr.sin_family = AF_INET;
+
+    inet_pton(AF_INET, SERVERIP, &serveraddr.sin_addr);
+
+    serveraddr.sin_port = htons(SERVERPORT);
+
+    if (connect(sock, (sockaddr*)&serveraddr, sizeof(serveraddr)) == SOCKET_ERROR)
+
+        err_quit("connect()");
+
+ 
+
+    // 고정길이
+
+    int namelen = filename.length();
+
+    if (send(sock, (char*)&namelen, sizeof(int), 0) == SOCKET_ERROR) {
+
+        err_display("send()");
+
+        return 1;
+
+    }
+
+    if (send(sock, filename.c_str(), namelen, 0) == SOCKET_ERROR) {
+
+        err_display("send()");
+
+        return 1;
+
+    }
+
+ 
+
+    // 가변길이
+
+    if (send(sock, (char*)&file_size, sizeof(long long), 0) == SOCKET_ERROR) {
+
+        err_display("send() - file_size");
+
+        return 1;
+
+    }
+
+ 
+
+    // 파일 전송
+
+    char buf[BUFSIZE];
+
+    long long totalsent = 0;
+
+    while (totalsent < file_size) {
+
+        file.read(buf, BUFSIZE);
+
+        int bytesRead = file.gcount();
+
+        int retval = send(sock, buf, bytesRead, 0);
+
+        if (retval == SOCKET_ERROR) {
+
+            err_display("send()");
+
+            break;
+
+        }
+
+        totalsent += retval;
+
+        cout << "\r전송중... " << fixed << setprecision(2) << (float)totalsent / file_size * 100 << "%" << flush;
+
+    }
+
+ 
+
+    cout << "\n전송 완료!" << endl;
+
+ 
+
+    closesocket(sock);
+
+    file.close();
+
+    WSACleanup();
+
+    return 0;
+
+}
