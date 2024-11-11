@@ -1,0 +1,113 @@
+#include "Common.h"
+
+#include <winsock2.h>
+
+#include <ws2tcpip.h>
+
+ 
+
+#pragma comment(lib, "ws2_32.lib")
+
+ 
+
+bool GetIPAddrAndAliases(const char* name)
+
+{
+
+    struct hostent* ptr = gethostbyname(name);
+
+    if (ptr == NULL) {
+
+        err_display("gethostbyname()");
+
+        return false;
+
+    }
+
+    
+
+    if (ptr->h_addrtype != AF_INET)
+
+        return false;
+
+    
+
+    printf("Host Name: %s\n", ptr->h_name);
+
+    
+
+    printf("별명 :\n");
+
+    for (char** alias = ptr->h_aliases; *alias != NULL; alias++) {
+
+        printf("  %s\n", *alias);
+
+    }
+
+    
+
+    printf("IP 주소:\n");
+
+    for (int i = 0; ptr->h_addr_list[i] != NULL; i++) {
+
+        char str[INET_ADDRSTRLEN];
+
+        inet_ntop(AF_INET, ptr->h_addr_list[i], str, sizeof(str));
+
+        printf("  %s\n", str);
+
+    }
+
+    
+
+    return true;
+
+}
+
+ 
+
+int main(int argc, char* argv[])
+
+{
+
+    if (argc != 2) {
+
+        printf("Usage: %s <domain_name>\n", argv[0]);
+
+        return 1;
+
+    }
+
+ 
+
+    // 윈속 초기화
+
+    WSADATA wsa;
+
+    if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0)
+
+        return 1;
+
+ 
+
+    const char* domain_name = argv[1];
+
+    printf("도메인 이름(변환 전) = %s\n\n", domain_name);
+
+ 
+
+    // 도메인 이름 -> IP 주소 및 별명
+
+    GetIPAddrAndAliases(domain_name);
+
+ 
+
+    // 윈속 종료
+
+    WSACleanup();
+
+    return 0;
+
+ 
+
+}
