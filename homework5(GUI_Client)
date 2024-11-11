@@ -154,3 +154,4 @@ void DisplayError(const char* msg)
     MessageBoxA(NULL, (char*)lpMsgBuf, msg, MB_ICONERROR);
     LocalFree(lpMsgBuf);
 }
+
