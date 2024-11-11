@@ -1,0 +1,70 @@
+#include <iostream>
+
+ 
+
+using namespace std;
+
+ 
+
+
+ 
+
+bool IsLittleEndian() {
+
+    union {
+
+        uint32_t i;
+
+        char c[4];
+
+    } bint = { 0x01020304 };
+
+ 
+
+    return bint.c[0] == 4;
+
+}
+
+ 
+
+bool IsBigEndian() {
+
+    union {
+
+        uint32_t i;
+
+        char c[4];
+
+    } bint = { 0x01020304 };
+
+ 
+
+    return bint.c[0] == 1;
+
+}
+
+ 
+
+int main() {
+
+    if (IsLittleEndian()) {
+
+       cout << "Little Endian." << endl;
+
+    }
+
+    else if (IsBigEndian()) {
+
+        cout << "Big Endian." << endl;
+
+    }
+
+    else {
+
+        cout << "Unknown endianness." << endl;
+
+    }
+
+ 
+
+}
