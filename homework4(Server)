@@ -1,0 +1,297 @@
+#include "Common.h"
+
+ 
+
+ 
+
+#define SERVERPORT 9000
+
+#define BUFSIZE    512
+
+ 
+
+using namespace std;
+
+ 
+
+struct ClientInfo {
+
+    string ip;
+
+    float progress;
+
+    mutex mtx;
+
+};
+
+ 
+
+vector<shared_ptr<ClientInfo>> clients;
+
+mutex clients_mutex;
+
+mutex console_mutex;
+
+vector<thread> client_threads;
+
+ 
+
+void update_display() {
+
+    lock_guard<mutex> lock(console_mutex);
+
+ 
+
+    // 커서를 화면 맨 위로 이동
+
+    cout << "\033[H";
+
+ 
+
+    // 각 클라이언트의 진행 상황 출력
+
+    for (const auto& client : clients) {
+
+        lock_guard<mutex> client_lock(client->mtx);
+
+        cout << client->ip << " 수신중... " << fixed << setprecision(2) << client->progress << "%" << endl;
+
+    }
+
+ 
+
+    // 남은 줄 지우기
+
+    cout << "\033[J" << flush;
+
+}
+
+ 
+
+void handle_client(SOCKET client_sock, sockaddr_in clientaddr, shared_ptr<ClientInfo> client_info) {
+
+    char clientIP[INET_ADDRSTRLEN];
+
+    inet_ntop(AF_INET, &clientaddr.sin_addr, clientIP, sizeof(clientIP));
+
+    client_info->ip = clientIP;
+
+ 
+
+    // 고정길이
+
+    int namelen;
+
+    if (recv(client_sock, (char*)&namelen, sizeof(int), MSG_WAITALL) == SOCKET_ERROR) {
+
+        err_display("recv() - namelen");
+
+        closesocket(client_sock);
+
+        return;
+
+    }
+
+ 
+
+    // 가변길이
+
+    string filename(namelen, '\0');
+
+    if (recv(client_sock, &filename[0], namelen, MSG_WAITALL) == SOCKET_ERROR) {
+
+        err_display("recv() - filename");
+
+        closesocket(client_sock);
+
+        return;
+
+    }
+
+ 
+
+    // 고정길이
+
+    long long filesize;
+
+    if (recv(client_sock, (char*)&filesize, sizeof(long long), MSG_WAITALL) == SOCKET_ERROR) {
+
+        err_display("recv() - filesize");
+
+        closesocket(client_sock);
+
+        return;
+
+    }
+
+ 
+
+    ofstream file(filename, ios::binary);
+
+    if (!file) {
+
+        closesocket(client_sock);
+
+        return;
+
+    }
+
+ 
+
+    long long totalrecv = 0;
+
+    char buf[BUFSIZE];
+
+    while (totalrecv < filesize) {
+
+        int retval = recv(client_sock, buf, (int)std::min<long long>(BUFSIZE, filesize - totalrecv), 0);
+
+        if (retval == SOCKET_ERROR) {
+
+            err_display("recv()");
+
+            break;
+
+        }
+
+        else if (retval == 0)
+
+            break;
+
+ 
+
+        file.write(buf, retval);
+
+        if (!file) {
+
+            break;
+
+        }
+
+ 
+
+        totalrecv += retval;
+
+        float progress = (float)totalrecv / filesize * 100;
+
+ 
+
+        {
+
+            lock_guard<mutex> lock(client_info->mtx);
+
+            client_info->progress = progress;
+
+        }
+
+ 
+
+        update_display();
+
+ 
+
+    }
+
+ 
+
+    file.close();
+
+    closesocket(client_sock);
+
+ 
+
+}
+
+ 
+
+ 
+
+int main() {
+
+    WSADATA wsa;
+
+    if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0)
+
+        return 1;
+
+ 
+
+    SOCKET listen_sock = socket(AF_INET, SOCK_STREAM, 0);
+
+    if (listen_sock == INVALID_SOCKET) err_quit("socket()");
+
+ 
+
+    sockaddr_in serveraddr{};
+
+    serveraddr.sin_family = AF_INET;
+
+    serveraddr.sin_addr.s_addr = htonl(INADDR_ANY);
+
+    serveraddr.sin_port = htons(SERVERPORT);
+
+    if (bind(listen_sock, (sockaddr*)&serveraddr, sizeof(serveraddr)) == SOCKET_ERROR)
+
+        err_quit("bind()");
+
+ 
+
+    if (listen(listen_sock, SOMAXCONN) == SOCKET_ERROR)
+
+        err_quit("listen()");
+
+ 
+
+    cout << "\033[2J\033[H";
+
+    cout << "서버 시작. 클라이언트 대기 중..." << endl;
+
+ 
+
+    while (true) {
+
+        sockaddr_in clientaddr{};
+
+        int addrlen = sizeof(clientaddr);
+
+        SOCKET client_sock = accept(listen_sock, (sockaddr*)&clientaddr, &addrlen);
+
+        if (client_sock == INVALID_SOCKET) {
+
+            err_display("accept()");
+
+            break;
+
+        }
+
+ 
+
+        auto client_info = make_shared<ClientInfo>();
+
+        {
+
+            lock_guard<mutex> lock(clients_mutex);
+
+            clients.push_back(client_info);
+
+        }
+
+ 
+
+        client_threads.emplace_back(handle_client, client_sock, clientaddr, client_info);
+
+        update_display();
+
+        cout << endl;
+
+    }
+
+  
+
+    closesocket(listen_sock);
+
+    WSACleanup();
+
+    return 0;
+
+}
